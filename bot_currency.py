@@ -76,13 +76,3 @@ async def calc(message: Message):
     else:
         await message.answer(f"Ошибка: формат должен быть XXXYYY сумма")
     
-        
-async def main():
-    global session_global
-    
-    async with aiohttp.ClientSession() as session:
-        session_global = session
-        
-
-if __name__ == "__main__":
-    asyncio.run(main())
