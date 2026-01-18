@@ -12,13 +12,9 @@ from bot_notes import bot_notes
 from bot_currency import dp_cur
 from bot_notes import dp_notes
 
-# pool, session
-import bot_currency
-import bot_notes
 
 # db
 from bot_notes import BD_NOTES
-
 
 
 async def tg_webhook_cur(request):
@@ -37,16 +33,20 @@ async def uptime_robot(request):
   return web.Response(text="ok")  
 
 async def main():
-  bot_notes.pool = await asyncpg.create_pool(BD_NOTES)
+  pool_main = await asyncpg.create_pool(BD_NOTES)
+  
+  import bot_notes
+  bot_notes.pool = pool_main
   
   async with aiohttp.ClientSession() as session:
+    import bot_currency
     bot_currency.session_global = session
   
   app = web.Application()
   app.router.add_post("/webhook/bot_cur", tg_webhook_cur)
   app.router.add_post("/webhook/bot_notes", tg_webhook_notes)
   app.router.add_get("/", uptime_robot)
-  
+
   runner = web.AppRunner(app)
   await runner.setup()
   site = web.TCPSite(runner, "0.0.0.0", 8080)
