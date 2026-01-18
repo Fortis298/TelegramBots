@@ -33,14 +33,13 @@ async def uptime_robot(request):
   return web.Response(text="ok")  
 
 async def main():
+  import bot_currency
+  bot_currency.session_global = aiohttp.ClientSession()
+  
   pool_main = await asyncpg.create_pool(BD_NOTES)
   
   import bot_notes
   bot_notes.pool = pool_main
-  
-  async with aiohttp.ClientSession() as session:
-    import bot_currency
-    bot_currency.session_global = session
   
   app = web.Application()
   app.router.add_post("/webhook/bot_cur", tg_webhook_cur)
