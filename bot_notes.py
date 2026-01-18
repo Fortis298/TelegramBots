@@ -1,297 +1,312 @@
-import telebot
-from telebot import types
-from telebot.apihelper import ApiTelegramException
-import psycopg
+import asyncio
+from aiogram import Bot, Dispatcher, F, Router
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.filters import CommandStart, Command
+from aiogram.exceptions import TelegramBadRequest
+import asyncpg
 import os
 
 BOT_TOKEN_NOTES = os.getenv('BOT_TOKEN_NOTES')
-BD = os.getenv('BD_NOTES')
+BD_NOTES = os.getenv('BD_NOTES')
 
-bot_notes = telebot.TeleBot(BOT_TOKEN_NOTES, threaded=False)
+bot_notes = Bot(token=BOT_TOKEN_NOTES)
+dp_notes = Dispatcher()
 
-conn = psycopg.connect(BD)
-conn.autocommit = True
+router = Router()
+dp_notes.include_router(router)
+
+pool = None
 
 user_status = {}
 user_data = {}
 bot_message_id = {}
 note_id_Edit = {}
 
-@bot_notes.message_handler(commands=['start'])
-def start(message):	
-	main_menu(message.chat.id)
-	
+### ОБРАБОТЧИК /START ###
+@dp_notes.message(CommandStart())
+async def start(message: Message):
+  await main_menu(message)
 
-@bot_notes.callback_query_handler(func=lambda call:True)
-def callback(call):	
-	if call.message:
-				
-		### СОЗДАНИЕ ЗАМЕТОК BUTTON. ДОБАВЛЕНИЕ SQL НАХОДИТСЯ В ОЖИДАНИИ ВВОДА ###
-		if call.data == 'add_note':	
-			user_status[call.from_user.id] = 'waiting_title'			
-			bot_message_id[call.from_user.id] = call.message.message_id
-			
-			markup = types.InlineKeyboardMarkup(row_width=1)			
-			button_exit = types.InlineKeyboardButton('⬅️ Отмена', callback_data='exit')			
-			markup.add(button_exit)	
-			
-			bot_message_id[call.from_user.id] = send_safe(
-				call.message.chat.id, 				
-				call.message.message_id, 				
-				'✏️ Введите название заметки', 				
-				markup			
-			)
-			
-			
-		### ПОКАЗ ЗАМЕТОК BUTTON ###
-		elif call.data == 'all_note':
-			print_button_notes(call, 'p', '🗒 *Ваши заметки:*')
-			
-			
-		### КНОПКА К ВОЗВРАЩЕНИЮ ПОКАЗА ЗАМЕТОК ###
-		elif call.data == 'exit_list_pNote':
-			print_button_notes(call, 'p', '🗒 *Ваши заметки:*')
-			
-			
-		### ПОКАЗ ЗАМЕТОК SQL ###
-		elif call.data.startswith('pNote_'):
-			note_id = int(call.data.split('_')[1])
-			
-			with conn.cursor() as cur:	
-				cur.execute('SELECT title, text, created_at FROM notes WHERE id = %s AND user_id = %s;', (note_id, call.from_user.id,))				
-				note = cur.fetchone()
-			
-			title, text, created_at = note
-			text_note = '*' + title + '*' + '\n\n' + text + '\n\n' + '*'+ 'Создано: ' + str(created_at)[0:10] + '*'
-			
-			markup = types.InlineKeyboardMarkup(row_width=1)
-			markup.add(types.InlineKeyboardButton('⬅️ Назад', callback_data='exit_list_pNote'))
-			
-			bot_message_id[call.from_user.id] = send_safe(
-				call.message.chat.id,
-				call.message.message_id,
-				text_note,
-				markup
-			)
-			
-			
-		### УДАЛЕНИЕ ЗАМЕТОК BUTTON ###
-		elif call.data == 'del_note':
-			print_button_notes(call, 'd', '🚮 *Выберите заметку для удаления:*')
-			
-			
-		### КНОПКА ВОЗВРАЩЕНИЯ К УДАЛЕНИЮ ЗАМЕТОК ###
-		elif call.data == 'exit_list_dNote':
-			print_button_notes(call, 'd', '🚮 *Выберите заметку для удаления:*')
-			
-			
-		### УДАЛЕНИЕ ЗАМЕТОК SQL ###
-		elif call.data.startswith('dNote_'):
-			note_id = int(call.data.split('_')[1])
-			
-			with conn.cursor() as cur:
-				cur.execute('DELETE FROM notes WHERE id = %s AND user_id = %s;', (note_id, call.from_user.id,))
-				
-				markup = types.InlineKeyboardMarkup(row_width=1)
-				markup.add(types.InlineKeyboardButton('⬅️ Назад', callback_data='exit_list_dNote'))
-				
-				bot_message_id[call.from_user.id] = send_safe(
-					call.message.chat.id,				
-					call.message.message_id,
-					'✅ Заметка удалена',
-					markup
-				)
-				
-				
-		### РЕДАКТИРОВАНИЕ ЗАМЕТОК BUTTON ###
-		elif call.data == 'edit_note':
-			print_button_notes(call, 'e', '📝 *Выберите заметку для редактирования:*')
-				
-				
-		### КНОПКА ОТМЕНЫ/НАЗАД ###
-		elif call.data == 'exit':	
-			user_status.pop(call.from_user.id, None)			
-			bot_message_id.pop(call.from_user.id, None)
-			note_id_Edit.pop(call.from_user.id, None)
-			main_menu(call.message.chat.id, call.message.message_id)
-			
-			
-		### КНОПКА ПОКАЗА ГЛАВНОГО МЕНЮ ###
-		elif call.data == 'main_menu':		
-			main_menu(call.message.chat.id, call.message.message_id)
-			
-			
-		### РЕДАКТИРОВАНИЕ ТЕКСТА SQL ###
-		elif call.data.startswith('eNote_'):
-			
-			note_id_Edit[call.from_user.id] = int(call.data.split('_')[1])
-			
-			user_status[call.from_user.id] = 'edit_note_text'						
-			bot_message_id[call.from_user.id] = call.message.message_id						
-			
-			markup = types.InlineKeyboardMarkup(row_width=1)						
-			button_exit = types.InlineKeyboardButton('⬅️ Отмена', callback_data='exit')	
-			markup.add(button_exit)							
-			
-			bot_message_id[call.from_user.id] = send_safe(				
-				call.message.chat.id, 								
-				call.message.message_id, 								
-				'✏️ Введите новый текст:', 								
-				markup						
-			)
-			
-			
-			
-@bot_notes.message_handler(content_types='text')
-def input_processing(message):	
-	user_id = message.from_user.id		
-	
-	### ОЖИДАНИЕ ВВОДЕ НАЗВАНИЯ ###
-	if user_status.get(user_id) == 'waiting_title':		
-		user_status.pop(message.from_user.id)		
-		user_status[message.from_user.id] = 'waiting_text'
-		user_data[message.from_user.id] = {'title': message.text}		
-		
-		bot_notes.delete_message(message.chat.id, message.message_id)				
-		
-		markup = types.InlineKeyboardMarkup(row_width=1)		
-		button_exit = types.InlineKeyboardButton('⬅️ Отмена', callback_data='exit')		
-		markup.add(button_exit)		
-												
-		bot_message_id[user_id] = send_safe(				
-			message.chat.id, 				
-			bot_message_id.get(user_id), 				
-			'✅ *Отлично*\n\nTеперь ввените текст', 				
-			markup			
-		)
-			
-	### ОЖИДАНИЕ ВВОДА ТЕКСТА ###
-	elif user_status.get(user_id) == 'waiting_text': 		
-		user_data[message.from_user.id]['text'] = message.text	
-		bot_notes.delete_message(message.chat.id, message.message_id)		
-				
-		add_note(
-			user_id,			
-			user_data[user_id]['title'],			
-			user_data[user_id]['text']		
-		)
-				
-		markup = types.InlineKeyboardMarkup(row_width=1)		
-		button_main_menu = types.InlineKeyboardButton('🏠 На главную', callback_data='main_menu')	
-		markup.add(button_main_menu)	
-					
-		bot_message_id[user_id] = send_safe(							
-			message.chat.id, 							
-			bot_message_id.get(user_id), 							
-			'✅ Заметка добавлена!', 							
-			markup					
-		)
-			
-		user_status.pop(message.from_user.id)		
-		bot_message_id.pop(message.from_user.id)
-		
-	### ОЖИДАНИЕ ВВОДА НОВОГО ТЕКСТА. РЕДАКТИРОВАНИЕ ТЕКСТА SQL ###
-	elif user_status.get(user_id) == 'edit_note_text':
-		with conn.cursor() as cur: 
-		  cur.execute('UPDATE notes SET text = %s WHERE id = %s AND user_id = %s;', (message.text, note_id_Edit[user_id], user_id))
-		  
-		markup = types.InlineKeyboardMarkup(row_width=1)
-		button_main_menu = types.InlineKeyboardButton('🏠 На главную', callback_data='main_menu')	
-		markup.add(button_main_menu)
-		
-		bot_message_id[user_id] = send_safe(							
-			message.chat.id, 							
-			bot_message_id.get(user_id), 							
-			'✅ Заметка обновлена!', 							
-			markup					
-		)
 
-		note_id_Edit.pop(user_id)
-		bot_notes.delete_message(message.chat.id, message.message_id)	
-				
-		
-### ПОКАЗ КНОПОК ДЛЯ ВЫБОРА ЗАМЕТОК ###
-def print_button_notes(call, symbol, text):
-	with conn.cursor() as cur:				
-		cur.execute('SELECT id, title FROM notes WHERE user_id = %s;', (call.from_user.id,))
-		notes = cur.fetchall()							
-		
-	if not notes:				
-		markup = types.InlineKeyboardMarkup(row_width=1)	
-									
-		button_main_menu = types.InlineKeyboardButton('🏠 На главную', callback_data='main_menu')	
-		markup.add(button_main_menu)	
-									
-		bot_message_id[call.from_user.id] = send_safe(									
-			call.message.chat.id, 									
-			call.message.message_id, 									
-			'У вас пока нет заметок 🥲', 									
-			markup							
-		)				
-		return						
-		
-	markup = types.InlineKeyboardMarkup(row_width=1)
-									
-	for note_id, title in notes:				
-		markup.add(types.InlineKeyboardButton(text=title, callback_data=f'{symbol}Note_{note_id}'))			
-						
-	markup.add(types.InlineKeyboardButton('🏠 На главную', callback_data='main_menu'))				
 
-	bot_message_id[call.from_user.id] = send_safe(								
-		call.message.chat.id, 								
-		call.message.message_id, 								
-		text, 								
-		markup						
-	)
-	
-		
-### БЕЗОПАСТНОЯ ОТПРАВКА СООБЩЕНИЙ ###
-def send_safe(chat_id, message_id, text, markup):
-	try:				
-		bot_notes.edit_message_text(									
-			chat_id=chat_id, 									
-			message_id=message_id,									
-			text=text,									
+### КНОПКА СОЗДАНИЯ ЗАМЕТОК###
+@router.callback_query(F.data == 'add_note')
+async def click_buttom_add_note(callback: CallbackQuery):
+  user_status[callback.from_user.id] = 'waiting_title'	
+  bot_message_id[callback.from_user.id] = callback.message.message_id
+  
+  button_exit = InlineKeyboardButton(text='⬅️ Отмена', callback_data='exit')
+  markup = InlineKeyboardMarkup(inline_keyboard=[[button_exit]])
+  
+  bot_message_id[callback.from_user.id] = await send_safe(
+    callback,
+    callback.message.chat.id,
+    callback.message.message_id,
+    '✏️ Введите название заметки', 				
+		markup
+  )
+
+
+
+### КНОПКА УДАЛЕНИЕ ЗАМЕТОК ###
+@router.callback_query(F.data == 'del_note')
+async def click_buttom_del_note(callback: CallbackQuery):
+  await print_list_note(callback, 'del', '🚮 *Выберите заметку для удаления:*')
+
+### ВОЗВРАЩЕНИЕ К ВЫБОРУ ЗАМЕТКИ ДЛЯ УДАЛЕНИЯ ###
+@router.callback_query(F.data == 'return_list_delNote')
+async def click_buttom_return_list_delNote(callback: CallbackQuery):
+  await print_list_note(callback, 'del', '🚮 *Выберите заметку для удаления:*')
+
+### УДАЛЕНИЕ ЗАМЕТОК SQL ###
+@router.callback_query(F.data.startswith('delNote_'))
+async def click_list_buttom_del(callback: CallbackQuery):
+  note_id = int(callback.data.split('_')[1])
+  
+  async with pool.acquire() as conn:
+    await conn.execute("DELETE FROM notes WHERE id = $1 AND user_id = $2", note_id, callback.from_user.id)
+  
+  button_main_menu = InlineKeyboardButton(text='⬅️ Назад', callback_data='return_list_delNote')
+  markup = InlineKeyboardMarkup(inline_keyboard=[[button_main_menu]])
+  
+  bot_message_id[callback.from_user.id] = await send_safe(
+    callback,
+    callback.message.chat.id,
+    callback.message.message_id,
+    '✅ Заметка удалена',
+		markup
+  )
+
+
+
+### КНОПКА ПОКАЗА ЗАМЕТОК ###
+@router.callback_query(F.data == 'all_note')
+async def click_buttom_all_note(callback: CallbackQuery):
+  await print_list_note(callback, 'all', '🗒 *Ваши заметки:*')
+
+### ВОЗВРАЩЕНИЕ К ВЫБОРУ ЗАМЕТКИ ДЛЯ ПРОСМОТРА ###
+@router.callback_query(F.data == 'return_list_allNote')
+async def click_buttom_return_list_allNote(callback: CallbackQuery):
+  await print_list_note(callback, 'all', '🗒 *Ваши заметки:*')
+
+### ПОКАЗ ЗАМЕТОК SQL ###
+@router.callback_query(F.data.startswith('allNote_'))
+async def click_list_buttom_all(callback: CallbackQuery):
+  note_id = int(callback.data.split('_')[1])
+  
+  async with pool.acquire() as conn:
+    note_info = await conn.fetchrow("SELECT title, text, created_at FROM notes WHERE id = $1 AND user_id = $2", note_id, callback.from_user.id)
+  
+  title, text, created_at = note_info
+  text_note_info = '*' + title + '*' + '\n\n' + text + '\n\n' + 'Создано: ' + str(created_at)[0:10]
+			
+  button_main_menu = InlineKeyboardButton(text='⬅️ Назад', callback_data='return_list_allNote')
+  markup = InlineKeyboardMarkup(inline_keyboard=[[button_main_menu]])
+  
+  bot_message_id[callback.from_user.id] = await send_safe(
+    callback,
+    callback.message.chat.id,
+    callback.message.message_id,
+    text_note_info,
+		markup
+  )
+  
+  
+  
+### КНОПКА РЕДАКТИРОВАНИЯ ЗАМЕТОК ###
+@router.callback_query(F.data == 'edit_note')
+async def click_buttom_edit_note(callback: CallbackQuery):
+  await print_list_note(callback, 'edit', '📝 *Выберите заметку для редактирования:*')
+  
+### ПОКАЗ ЗАМЕТОК SQL ###
+@router.callback_query(F.data.startswith('editNote_'))
+async def click_list_buttom_edit(callback: CallbackQuery):
+  note_id_Edit[callback.from_user.id] = int(callback.data.split('_')[1])
+  user_status[callback.from_user.id] = 'edit_note_text'	
+  
+  button_exit = InlineKeyboardButton(text='⬅️ Назад', callback_data='exit')
+  markup = InlineKeyboardMarkup(inline_keyboard=[[button_exit]])
+  
+  bot_message_id[callback.from_user.id] = await send_safe(
+    callback,
+    callback.message.chat.id,
+    callback.message.message_id,
+    '✏️ Введите новый текст:',
+		markup
+  )
+
+
+  
+### ОБРАБОТКА НАЖАТИЯ КНОПКИ exit ###
+@router.callback_query(F.data == 'exit')
+async def click_buttom_exit(callback: CallbackQuery):
+  user_status.pop(callback.from_user.id, None)			
+  bot_message_id.pop(callback.from_user.id, None)
+  note_id_Edit.pop(callback.from_user.id, None)
+  
+  await main_menu(callback, callback.message.message_id, callback.message.chat.id)
+  
+### ОБРАБОТКА НАЖАТИЯ КНОПКМ main_menu ###
+@router.callback_query(F.data == 'main_menu')
+async def click_buttom_main_menu(callback: CallbackQuery):
+  await main_menu(callback, callback.message.message_id, callback.message.chat.id)
+  
+
+### ВВОД ТЕКСТА ###
+@dp_notes.message(F.text)
+async def input_processing(message: Message):
+  user_id = message.from_user.id
+  
+  ### ОЖИДАНИЕ ВВОДА НАЗВАНИЯ ###
+  if user_status.get(user_id) == 'waiting_title':
+    user_status.pop(message.from_user.id)
+    user_status[message.from_user.id] = 'waiting_text'
+    user_data[message.from_user.id] = {'title': message.text}
+    
+    await bot_notes.delete_message(chat_id=message.chat.id, message_id=message.message_id)
+    
+    button_exit = InlineKeyboardButton(text='⬅️ Отмена', callback_data='exit')
+    markup = InlineKeyboardMarkup(inline_keyboard=[[button_exit]])
+    
+    bot_message_id[message.from_user.id] = await send_safe(
+      message,
+      message.chat.id,
+      bot_message_id.get(user_id),
+      '✅ *Отлично*\n\nTеперь ввените текст', 	
+      markup
+    )
+  
+  ### ОЖИДАНИЕ ВВОДА ТЕКСТА ###
+  elif user_status.get(user_id) == 'waiting_text':
+    user_data[message.from_user.id]['text'] = message.text
+    await bot_notes.delete_message(chat_id=message.chat.id, message_id=message.message_id)
+    
+    # SQL
+    async with pool.acquire() as conn:
+      await conn.execute("INSERT INTO notes (user_id, title, text) VALUES ($1, $2, $3)", user_id, user_data[user_id]['title'],	user_data[user_id]['text'])
+    
+    button_main_menu = InlineKeyboardButton(text='🏠 На главную', callback_data='main_menu')
+    markup = InlineKeyboardMarkup(inline_keyboard=[[button_main_menu]])
+    
+    bot_message_id[message.from_user.id] = await send_safe(
+      message,
+      message.chat.id,
+      bot_message_id.get(user_id),
+      '✅ Заметка добавлена!', 
+      markup
+    )
+    
+    user_status.pop(message.from_user.id)
+    bot_message_id.pop(message.from_user.id)
+    
+  ### ОЖИДАНИЕ ВВОДА НОВОГО ТЕКСТА ###
+  elif user_status.get(user_id) == 'edit_note_text':
+    async with pool.acquire() as conn:
+      await conn.execute("UPDATE notes SET text = $1 WHERE id = $2 AND user_id = $3", message.text, note_id_Edit[user_id], user_id)
+    
+    await bot_notes.delete_message(chat_id=message.chat.id, message_id=message.message_id)
+    
+    button_main_menu = InlineKeyboardButton(text='🏠 На главную', callback_data='main_menu')
+    markup = InlineKeyboardMarkup(inline_keyboard=[[button_main_menu]])
+    
+    bot_message_id[message.from_user.id] = await send_safe(
+      message,
+      message.chat.id,
+      bot_message_id.get(user_id),
+      '✅ Заметка обновлена!', 
+      markup
+    )
+    
+    note_id_Edit.pop(user_id)
+    
+
+### БЕЗОПАСТНАЯ ОТПРАВКА СООБЩЕНИЙ ###
+async def send_safe(message, chat_id, message_id, text, markup):
+  try:
+    await message.bot.edit_message_text(
+      chat_id=chat_id, 
+      message_id=message_id,
+      text=text, 
+      reply_markup=markup, 
+      parse_mode='Markdown'
+    )
+    return message_id
+  except TelegramBadRequest:
+    msg = await message.answer(
+      text=text,									
 			reply_markup=markup,
-			parse_mode='Markdown'				
-		)
-		return message_id		
-	except ApiTelegramException:				
-		msg = bot_notes.send_message(														
-			chat_id=chat_id, 														
-			text=text,														
-			reply_markup=markup,
-			parse_mode='Markdown'									
-		)
-		return msg.message_id
-		
-		
-### СОЗДАНИЯ ЗАМЕТОК SQL ###
-def add_note(user_id, title, text):
-	with conn.cursor() as cur:
-		cur.execute('INSERT INTO notes (user_id, title, text) VALUES (%s, %s, %s)', (user_id, title, text))
+			parse_mode='Markdown'
+    )
+    return msg.message_id
 
 
-### ГЛАВНОЕ МЕНЮ ###
-def main_menu(chat_id, message_id=None):	
-	markup = types.InlineKeyboardMarkup(row_width=2)	
-	button_add_note = types.InlineKeyboardButton('🆕 Новая заметка', callback_data='add_note')	
-	button_del_note = types.InlineKeyboardButton('🗑 Удалить заметку', callback_data='del_note')	
-	button_edit_note = types.InlineKeyboardButton('📝 Ред. заметку', callback_data='edit_note')	
-	button_all_note = types.InlineKeyboardButton('🗒 Все заметки', callback_data='all_note')		
-	
-	markup.add(button_add_note, button_del_note, button_edit_note, button_all_note)	
-	
-	text = (
+### ПОКАЗ ГЛАВНОГО МЕНЮ ###
+async def main_menu(message, message_id=None, chat_id=None):
+  button_add_note = InlineKeyboardButton(text='🆕 Новая заметка', callback_data='add_note')
+  button_del_note = InlineKeyboardButton(text='🗑 Удалить заметку', callback_data='del_note')
+  button_edit_note = InlineKeyboardButton(text='📝 Ред. заметку', callback_data='edit_note')
+  button_all_note = InlineKeyboardButton(text='🗒 Все заметки', callback_data='all_note')
+  
+  markup = InlineKeyboardMarkup(inline_keyboard=[
+    [button_add_note, button_del_note],
+    [button_edit_note, button_all_note]
+  ])
+  
+  text = (
 		'🎉 *Добро пожаловать в MyNotes!*\n\n'
 		'Здесь вы можете:\n'
 		'*•* Создавать новые заметки\n'
 		'*•* Просматривать все записи\n'
 		'*•* Редактировать и удалять\n\n'
 		'Выберите действие ниже:'
-		)    	
+	)
 	
-	if message_id:	
-		send_safe(chat_id, message_id, text, markup)
-	else:		
-		bot_notes.send_message(chat_id, text, parse_mode='Markdown', reply_markup=markup)    	
+  if message_id and chat_id:
+    await send_safe(message, chat_id, message_id, text, markup)
+  else:
+    await message.answer(text, reply_markup=markup, parse_mode='Markdown')
+
+
+### ПОКАЗ КНОПОК ДЛЯ ВЫБОРА ЗАМЕТОК ###
+async def print_list_note(callback, symbol, text):
+  async with pool.acquire() as conn:
+      notes = await conn.fetch("SELECT id, title FROM notes WHERE user_id = $1", callback.from_user.id)
+      
+  if not notes:
+    button_main_menu = InlineKeyboardButton(text='🏠 На главную', callback_data='main_menu')
+    markup = InlineKeyboardMarkup(inline_keyboard=[[button_main_menu]])
+    
+    bot_message_id[callback.from_user.id] = await send_safe(
+      callback,
+      callback.message.chat.id,
+      callback.message.message_id,
+      'У вас пока нет заметок 🥲', 				
+      markup
+    )
+    return
+  
+  buttons = []
+  button_main_menu = InlineKeyboardButton(text='🏠 На главную', callback_data='main_menu')
+  
+  for note_id, title in notes:
+    button = InlineKeyboardButton(text=title, callback_data=f'{symbol}Note_{note_id}')
+    buttons.append([button])
+  
+  buttons.append([button_main_menu])
+  markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+    
+  bot_message_id[callback.from_user.id] = await send_safe(
+      callback,
+      callback.message.chat.id,
+      callback.message.message_id,
+      text,
+      markup
+    )
+    
+async def main():
+  global pool
+  pool = await asyncpg.create_pool(BD_NOTES)
+  
+  
+if __name__ == "__main__":
+    asyncio.run(main()) 	
