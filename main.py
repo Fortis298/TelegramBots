@@ -1,28 +1,41 @@
-from flask import Flask, request
-import telebot
-import os
+import asyncio
+from aiohttp import web
+from aiogram.types import Update
 
 from bot_currency import bot_cur
 from bot_notes import bot_notes
 
-app = Flask(__name__)
-
-@app.route(f'/webhook/bot_cur', methods=['POST'])
-def webhook_cur():
-    json_string = request.get_data().decode('utf-8')
-    update = telebot.types.Update.de_json(json_string)
-    bot_cur.process_new_updates([update])
-    return '', 200
+from bot_currency import dp_cur
+from bot_notes import dp_notes
 
 
-@app.route(f'/webhook/bot_notes', methods=['POST'])
-def webhook_notes():
-    json_string = request.get_data().decode('utf-8')
-    update = telebot.types.Update.de_json(json_string)
-    bot_notes.process_new_updates([update])
-    return '', 200
+async def tg_webhook_cur(request):
+    data = await request.json()
+    update = Update(**data)
+    await dp_cur.feed_update(bot_cur, update)
+    return web.Response(text="ok")  
+    
+async def tg_webhook_notes(request):
+    data = await request.json()
+    update = Update(**data)
+    await dp_notes.feed_update(bot_notes, update)
+    return web.Response(text="ok")  
+
+async def uptime_robot(request):
+    return web.Response(text="ok")  
+
+async def main():
+    app = web.Application()
+    app.router.add_post("/webhook/bot_cur", tg_webhook_cur)
+    app.router.add_post("/webhook/bot_notes", tg_webhook_notes)
+    app.router.add_get("/", uptime_robot)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 8080)
+    await site.start()
+
+    await asyncio.Event().wait()
 
 
-@app.route("/")
-def health():
-    return "ok", 200
+asyncio.run(main())
