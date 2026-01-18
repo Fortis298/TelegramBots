@@ -1,5 +1,6 @@
 import asyncio
 import asyncpg
+import aiohttp
 from aiohttp import web
 from aiogram.types import Update
 
