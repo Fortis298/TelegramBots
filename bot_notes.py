@@ -303,10 +303,3 @@ async def print_list_note(callback, symbol, text):
       markup
     )
     
-async def main():
-  global pool
-  pool = await asyncpg.create_pool(BD_NOTES)
-  
-  
-if __name__ == "__main__":
-    asyncio.run(main()) 	
